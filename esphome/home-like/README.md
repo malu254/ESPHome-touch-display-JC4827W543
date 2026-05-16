@@ -48,6 +48,11 @@ Use this file if you have a standalone ESP32-2432S028 board.
 
 Use this file if you have a **separate ILI9341 display module** wired to a generic ESP32 board (e.g. ESP32 DevKit / Wroom 32D). This requires manual wiring according to the pin table in the main README.
 
+### `jc4827w543/home-like.yaml` — Guition JC4827W543 (ESP32-S3)
+
+Use this file if you have a **Guition JC4827W543** smart display module.  
+It targets the integrated ESP32-S3 board layout with NV3041A QSPI display and GT911 touchscreen.
+
 ---
 
 ## Credentials — secrets.yaml

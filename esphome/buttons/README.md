@@ -43,6 +43,11 @@ The **ESP32-2432S028**, commonly known as the **Cheap Yellow Display (CYD)**, is
 
 Use this file if you have a **separate ILI9341 display module** wired to a generic ESP32 board. Requires manual wiring according to the pin table in the main README.
 
+### `jc4827w543/buttons.yaml` — Guition JC4827W543 (ESP32-S3)
+
+Use this file if you have the **Guition JC4827W543** 4.3" smart display module (NV3041A + GT911).  
+This variant uses the integrated ESP32-S3, QSPI display bus, and I2C touch controller pinout for that board.
+
 ---
 
 ## Credentials — secrets.yaml

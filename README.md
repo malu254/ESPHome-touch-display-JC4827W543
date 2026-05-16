@@ -7,7 +7,7 @@
 ESPHome powered Home Assistant control panel using the popular Cheap Yellow Display (ESP32-2432S028).
 
 A 3D-printable enclosure with adjustable tilt for an ESP32 2.8" ILI9341 touchscreen, powered by ESPHome + LVGL and integrated with Home Assistant.  
-Includes ready-to-flash YAML configs for the ESP32-2432S028 (Cheap Yellow Display) and a standalone ILI9341 + external ESP32 wiring variant.
+Includes ready-to-flash YAML configs for the ESP32-2432S028 (Cheap Yellow Display), a standalone ILI9341 + external ESP32 wiring variant, and the Guition JC4827W543 smart display.
 
 Multiple mounting options are supported:
 
@@ -32,10 +32,11 @@ The enclosure is designed for:
 - Minimal footprint  
 - Professional, integrated appearance  
 
-Two hardware variants are supported:
+Three hardware variants are supported:
 
 - ✅ **ESP32-2432S028 (Cheap Yellow Display / CYD)**
 - ✅ **Standalone ILI9341 + External ESP32 wiring variant**
+- ✅ **Guition JC4827W543 (ESP32-S3 + NV3041A + GT911)**
 
 The ESP32-2432S028 integrates the ESP32, ILI9341 display, touchscreen controller, and backlight circuitry on a single board.  
 It is commonly known as the **Cheap Yellow Display (CYD)** in the maker community and is the easiest option for this project.
@@ -135,6 +136,7 @@ This project was tested using:
 - **Home Assistant 2026.2+**
 - ESP32-2432S028 (Cheap Yellow Display / CYD)
 - ILI9341 + XPT2046 standalone wiring variant
+- Guition JC4827W543 (ESP32-S3 + NV3041A + GT911)
 
 # ⚠️ IMPORTANT -- Enable "Actions" in Home Assistant
 
@@ -172,7 +174,7 @@ Without this setting, direct control will not work.
 - Adjustable 3D-printed enclosure
 - Multiple mounting options: desk mount, under-desk mount, wall mount, and flush mount
 - Hidden cable routing
-- Works with CYD or external ESP32 wiring
+- Works with CYD, external ESP32 wiring, or Guition JC4827W543
 
 ------------------------------------------------------------------------
 
@@ -266,6 +268,25 @@ Use the wiring table below, which shows how to put everything together.
 | LED                          |              |                                                      |
 | ledc                         | GPIO4        | Backlight LED display                                |
 
+## Option C -- Guition JC4827W543 (ESP32-S3 Smart Display)
+
+The JC4827W543 is an integrated 4.3" smart display module with ESP32-S3, NV3041A display, and GT911 touchscreen.
+Use the dedicated YAML variants in `esphome/home-like/jc4827w543/` or `esphome/buttons/jc4827w543/`.
+
+| JC4827W543                   | PIN          | Comment                                              |
+|-----------------------------|--------------|------------------------------------------------------|
+| QSPI LCD                    |              | NV3041A controller                                   |
+| clk_pin                     | GPIO47       | QSPI display clock                                   |
+| data_pins                   | GPIO21/48/40/39 | QSPI data lines                                  |
+| cs_pin                      | GPIO45       | Display chip-select                                  |
+| Touchscreen (GT911, I2C)    |              | Capacitive touch                                     |
+| sda                         | GPIO8        | I2C SDA                                               |
+| scl                         | GPIO4        | I2C SCL                                               |
+| interrupt_pin               | GPIO3        | Touch interrupt                                       |
+| reset_pin                   | GPIO38       | Touch reset                                           |
+| Backlight                   |              |                                                      |
+| ledc                        | GPIO1        | Display backlight PWM                                 |
+
 ------------------------------------------------------------------------
 
 # 🚀 Installation
@@ -286,6 +307,10 @@ Available YAML variants (pick **one UI** for your **hardware**):
 ### External display wiring (any ESP32 + ILI9341 + XPT2046)
 - `esphome/home-like/ili9341-external-esp32/home-like.yaml` – 2x3 “tiles” UI (wallpaper + tiles) — actively maintained
 - `esphome/buttons/ili9341-external-esp32/buttons.yaml` – lockscreen with 4 round buttons (simple / legacy)
+
+### Guition JC4827W543 (ESP32-S3 + NV3041A + GT911)
+- `esphome/home-like/jc4827w543/home-like.yaml` – 2x3 “tiles” UI for the integrated 4.3" 480×272 smart display
+- `esphome/buttons/jc4827w543/buttons.yaml` – lockscreen with 4 round buttons for JC4827W543
 
 > Tip: The `home-like.yaml` file uses orientation-specific background images located in `esphome/home-like/images/`.
 > For a full reference of all tile substitutions and copy-paste examples, see [`esphome/home-like/TILE_CONFIGURATION.md`](esphome/home-like/TILE_CONFIGURATION.md).
@@ -511,4 +536,3 @@ Feel free to fork, remix and improve it.
 
 # More projects
 Looking for more cool projects using this display? Check out the [LoctekMotion Touch Display GitHub repository](https://github.com/3DJupp/LoctekMotion-TouchDisplay)! This awesome project takes the same 2.8" ILI9341 touchscreen setup and repurposes it—not for lights, but for controlling a height-adjustable Flexispot desk with ease. If you're into smart home automation and custom builds, it's definitely worth a look!
-

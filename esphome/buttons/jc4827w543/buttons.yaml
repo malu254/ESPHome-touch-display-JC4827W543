@@ -1,0 +1,690 @@
+############################################################
+# SmartDisplay (Guition JC4827W543) – ESPHome + LVGL lockscreen UI
+#
+# Target hardware
+# - Guition JC4827W543
+#   (ESP32-S3 + NV3041A 480x272 display + GT911 touchscreen)
+#
+# Purpose
+# - LVGL renders a simple “lockscreen” UI: time/date + 4 toggle buttons.
+#
+# Touch input → Home Assistant
+# - Every touch publishes an “action” string via a text_sensor:
+#     sensor.smartdisplay_action = "btn1_press" / "btn2_press" / "btn3_press" / "btn4_press"
+# - The sensor is auto-reset to "" after each press so repeated presses trigger reliably.
+#
+# Two supported control modes (choose what fits your setup)
+# 1) Direct control (DEFAULT, simplest)
+#    - DIRECT_ACTIONS: "true" (default)
+#    - Each touch will:
+#        • publish the action string AND
+#        • directly call a Home Assistant service
+#          (default: light.toggle on BTN*_ENTITY)
+#    - Use this if you simply want to toggle lights without creating automations.
+#
+# 2) Automation-only control (custom logic)
+#    - DIRECT_ACTIONS: "false"
+#    - Each touch will ONLY publish the action string.
+#    - You implement the behavior in Home Assistant automations using:
+#        Trigger → State → sensor.smartdisplay_action → To: btn1_press (etc.)
+#
+# If you do NOT want to toggle lights
+# - Either change the homeassistant.action blocks to a different service
+#   (e.g. switch.toggle, script.turn_on, scene.turn_on, ...)
+# - Or set DIRECT_ACTIONS to "false" and handle everything via HA automations.
+#
+# UI updates
+# - On boot, every minute, and whenever the configured HA entities change
+#   (mirrored into ESPHome to keep LVGL button states in sync).
+#
+# What you must adapt before flashing
+# 1) Secrets: api.encryption.key, ota.password, WiFi credentials (prefer secrets.yaml)
+# 2) BTN*_ENTITY: Home Assistant entity IDs you want to control/mirror
+# 3) Touch transform:
+#    - if touch is mirrored, adjust touchscreen.transform values
+#
+# Home Assistant note
+# - In the ESPHome device settings, enable:
+#   “Allow the device to perform Home Assistant actions”
+#   Otherwise homeassistant.action calls are blocked.
+############################################################
+
+# ==========================================================
+# USER CONFIG (edit this section to match your HA setup)
+#
+# - DIRECT_ACTIONS:
+#     "true"  -> touch publishes action + calls HA service (light.toggle by default)
+#     "false" -> touch only publishes action (all logic handled in HA)
+#
+# - BTN*_ENTITY:
+#     The Home Assistant entity to control and mirror for the button state.
+#     Must exist in Home Assistant.
+#
+# - BTN*_LABEL / BTN*_ICON:
+#     Only affects what is shown on the display.
+# ==========================================================
+substitutions:
+  # Enable/disable direct Home Assistant service calls on touch.
+  # - "true"  -> touching a button also calls light.toggle (plug & play)
+  # - "false" -> touching a button ONLY publishes the action text_sensor
+  DIRECT_ACTIONS: "true"
+
+  # Button 1
+  BTN1_ENTITY: "light.desk_lamp"
+  BTN1_LABEL: "Desk"
+  BTN1_ICON: "\U000F095F"
+
+  # Button 2
+  BTN2_ENTITY: "light.ceiling_light"
+  BTN2_LABEL: "Ceiling"
+  BTN2_ICON: "\U000F0769"
+
+  # Button 3
+  BTN3_ENTITY: "light.globe_lamp"
+  BTN3_LABEL: "Globe"
+  BTN3_ICON: "\U000F08DD"
+
+  # Button 4
+  BTN4_ENTITY: "light.ambient_light"
+  BTN4_LABEL: "Ambient"
+  BTN4_ICON: "\U000F1051"
+# ==========================================================
+
+# ============================================================
+# No need to edit below this line.
+# All configuration is done via the substitutions above.
+# Credentials are managed in secrets.yaml (see secrets.yaml.example).
+# ============================================================
+
+esphome:
+  name: smartdisplay
+  friendly_name: SmartDisplay
+  on_boot:
+    priority: 600
+    then:
+      - script.execute: ui_refresh
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: y
+      CONFIG_ESP32S3_DATA_CACHE_64KB: y
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y
+      CONFIG_SPIRAM_RODATA: y
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+
+# Credentials are loaded from secrets.yaml — copy secrets.yaml.example to secrets.yaml and fill in your values.
+api:
+  encryption:
+    key: !secret smartdisplay_api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Smartdisplay Fallback Hotspot"
+    password: !secret wifi_ap_password
+
+captive_portal:
+
+# Use Home Assistant time so the display always matches your HA timezone.
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+    on_time:
+      - seconds: 0
+        minutes: /1
+        then:
+          - script.execute: ui_refresh
+
+font:
+  - file: "gfonts://Roboto@500"
+    id: big_text
+    size: 60
+    bpp: 4
+    glyphs: ['&','@','!',',','.','?','"','%','(',')','+','-','_',':','°','0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z',' ','a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','å','Ä','ä','Ö','ö','Ü','ü','/']
+
+  - file: "gfonts://Roboto@300"
+    id: notice_text
+    size: 16
+    bpp: 4
+    glyphs: ['&','@','!',',','.','?','"','%','(',')','+','-','_',':','°','0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z',' ','a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','å','Ä','ä','Ö','ö','Ü','ü','/']
+
+  - file: "gfonts://Roboto@400"
+    id: label
+    size: 13
+    bpp: 4
+    glyphs: ['&','@','!',',','.','?','"','%','(',')','+','-','_',':','°','0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z',' ','a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','å','Ä','ä','Ö','ö','Ü','ü','/']
+
+  # Material Design Icons (MDI) — included at fonts/materialdesignicons-webfont.ttf (Apache 2.0)
+  # Source: https://github.com/Templarian/MaterialDesign-Webfont
+  - file: 'fonts/materialdesignicons-webfont.ttf'
+    id: materialdesign_icons
+    size: 35
+    glyphs: ["\U000F095F", "\U000F0769", "\U000F08DD", "\U000F1051"]
+
+color:
+  - id: ACTIVE
+    hex: "FEC600"
+  - id: INACTIVE
+    hex: "808080"
+
+sensor:
+  - platform: wifi_signal
+    name: "Wifi Signal"
+    update_interval: 600s
+
+  - platform: uptime
+    name: "Uptime"
+    id: uptime_s
+    update_interval: 15s
+
+binary_sensor:
+  - platform: status
+    name: "Node Status"
+    id: system_status
+
+  # Mirror HA entities (used to render the "checked" state of each LVGL button)
+  # These are read-only "views" of HA state for UI sync.
+  - platform: homeassistant
+    id: ha_state_btn1
+    entity_id: ${BTN1_ENTITY}
+    on_state:
+      then:
+        - script.execute: ui_refresh
+
+  - platform: homeassistant
+    id: ha_state_btn2
+    entity_id: ${BTN2_ENTITY}
+    on_state:
+      then:
+        - script.execute: ui_refresh
+
+  - platform: homeassistant
+    id: ha_state_btn3
+    entity_id: ${BTN3_ENTITY}
+    on_state:
+      then:
+        - script.execute: ui_refresh
+
+  - platform: homeassistant
+    id: ha_state_btn4
+    entity_id: ${BTN4_ENTITY}
+    on_state:
+      then:
+        - script.execute: ui_refresh
+
+text_sensor:
+  # ----------------------------------------------------------
+  # SmartDisplay Action
+  #
+  # This is the main "touch trigger" exported to Home Assistant:
+  # - On touch, we publish one of:
+  #     btn1_press / btn2_press / btn3_press / btn4_press
+  # - Then we auto-reset to "" so repeated presses still trigger.
+  #
+  # In HA automations, use a simple state trigger:
+  # - Entity: sensor.smartdisplay_action
+  # - To: btn1_press (etc.)
+  # ----------------------------------------------------------
+  - platform: template
+    id: smartdisplay_action
+    name: "SmartDisplay Action"
+    icon: mdi:gesture-tap-button
+
+  - platform: template
+    name: "Uptime (formatted)"
+    lambda: |-
+      uint32_t dur = (uint32_t) id(uptime_s).state;
+
+      int dys = 0;
+      int hrs = 0;
+      int mnts = 0;
+
+      if (dur >= 86400) { dys = dur / 86400; dur = dur - (dys * 86400); }
+      if (dur >= 3600)  { hrs = dur / 3600;  dur = dur - (hrs * 3600); }
+      if (dur >= 60)    { mnts = dur / 60;   dur = dur - (mnts * 60); }
+
+      static char buffer[20];
+      snprintf(buffer, sizeof(buffer), "%dd %02dh %02dm %02ds", dys, hrs, mnts, dur);
+      return {buffer};
+    icon: mdi:clock-start
+    update_interval: 60s
+
+switch:
+  - platform: restart
+    name: "Restart"
+
+# QSPI bus for NV3041A display
+spi:
+  id: quad_spi
+  type: quad
+  clk_pin: GPIO47
+  data_pins: [GPIO21, GPIO48, GPIO40, GPIO39]
+
+i2c:
+  - id: touchscreen_bus
+    sda: GPIO8
+    scl: GPIO4
+    frequency: 400kHz
+    scan: true
+
+output:
+  - platform: ledc
+    pin: GPIO1
+    id: gpio_backlight_pwm
+
+light:
+  - platform: monochromatic
+    output: gpio_backlight_pwm
+    name: "Power Display Backlight"
+    id: back_light
+    restore_mode: ALWAYS_ON
+
+# Touchscreen configuration (GT911)
+touchscreen:
+  - platform: gt911
+    id: ts_touch
+    i2c_id: touchscreen_bus
+    interrupt_pin:
+      number: GPIO3
+      ignore_strapping_warning: true
+    reset_pin: GPIO38
+    update_interval: never
+    transform:
+      swap_xy: false
+      mirror_x: true
+      mirror_y: true
+    on_touch:
+      - script.execute: ui_refresh
+
+# Display configuration (NV3041A)
+display:
+  - platform: qspi_dbi
+    id: my_display
+    model: CUSTOM
+    spi_id: quad_spi
+    cs_pin:
+      number: GPIO45
+      ignore_strapping_warning: true
+    invert_colors: true
+    update_interval: 50ms
+    auto_clear_enabled: false
+    data_rate: 20MHz
+    init_sequence:
+      - [0xff, 0xa5]
+      - [0x36, 0xc0]
+      - [0x3A, 0x01]
+      - [0x41, 0x03]
+      - [0x44, 0x15]
+      - [0x45, 0x15]
+      - [0x7d, 0x03]
+      - [0xc1, 0xbb]
+      - [0xc2, 0x05]
+      - [0xc3, 0x10]
+      - [0xc6, 0x3e]
+      - [0xc7, 0x25]
+      - [0xc8, 0x11]
+      - [0x7a, 0x5f]
+      - [0x6f, 0x44]
+      - [0x78, 0x70]
+      - [0xc9, 0x00]
+      - [0x67, 0x21]
+      - [0x51, 0x0a]
+      - [0x52, 0x76]
+      - [0x53, 0x0a]
+      - [0x54, 0x76]
+      - [0x46, 0x0a]
+      - [0x47, 0x2a]
+      - [0x48, 0x0a]
+      - [0x49, 0x1a]
+      - [0x56, 0x43]
+      - [0x57, 0x42]
+      - [0x58, 0x3c]
+      - [0x59, 0x64]
+      - [0x5a, 0x41]
+      - [0x5b, 0x3c]
+      - [0x5c, 0x02]
+      - [0x5d, 0x3c]
+      - [0x5e, 0x1f]
+      - [0x60, 0x80]
+      - [0x61, 0x3f]
+      - [0x62, 0x21]
+      - [0x63, 0x07]
+      - [0x64, 0xe0]
+      - [0x65, 0x02]
+      - [0xca, 0x20]
+      - [0xcb, 0x52]
+      - [0xcc, 0x10]
+      - [0xcd, 0x42]
+      - [0xd0, 0x20]
+      - [0xd1, 0x52]
+      - [0xd2, 0x10]
+      - [0xd3, 0x42]
+      - [0xd4, 0x0a]
+      - [0xd5, 0x32]
+      - [0x80, 0x00]
+      - [0xa0, 0x00]
+      - [0x81, 0x07]
+      - [0xa1, 0x06]
+      - [0x82, 0x02]
+      - [0xa2, 0x01]
+      - [0x86, 0x11]
+      - [0xa6, 0x10]
+      - [0x87, 0x27]
+      - [0xa7, 0x27]
+      - [0x83, 0x37]
+      - [0xa3, 0x37]
+      - [0x84, 0x35]
+      - [0xa4, 0x35]
+      - [0x85, 0x3f]
+      - [0xa5, 0x3f]
+      - [0x88, 0x0b]
+      - [0xa8, 0x0b]
+      - [0x89, 0x14]
+      - [0xa9, 0x14]
+      - [0x8a, 0x1a]
+      - [0xaa, 0x1a]
+      - [0x8b, 0x0a]
+      - [0xab, 0x0a]
+      - [0x8c, 0x14]
+      - [0xac, 0x08]
+      - [0x8d, 0x17]
+      - [0xad, 0x07]
+      - [0x8e, 0x16]
+      - [0xae, 0x06]
+      - [0x8f, 0x1B]
+      - [0xaf, 0x07]
+      - [0x90, 0x04]
+      - [0xb0, 0x04]
+      - [0x91, 0x0a]
+      - [0xb1, 0x0a]
+      - [0x92, 0x16]
+      - [0xb2, 0x15]
+      - [0xff, 0x00]
+      - [0x11, 0x00]
+      - [0x29, 0x00]
+
+    dimensions:
+      width: 480
+      height: 272
+
+lvgl:
+  displays:
+    - my_display
+  touchscreens:
+    - touchscreen_id: ts_touch
+
+  theme:
+    obj:
+      bg_color: 0x000000
+      bg_opa: COVER
+    button:
+      radius: 30
+      width: 60
+      height: 60
+      border_width: 0
+      shadow_width: 0
+      bg_color: !lambda return id(INACTIVE);
+      bg_opa: COVER
+      checked:
+        bg_color: 0xFFFFFF
+        bg_opa: COVER
+
+  pages:
+    - id: lockscreen_page
+      bg_color: 0x000000
+      bg_opa: COVER
+      widgets:
+        - label:
+            id: lbl_date
+            x: 0
+            y: 30
+            width: 480
+            text_align: CENTER
+            text_font: notice_text
+            text_color: 0xFFFFFF
+            text: ""
+
+        - label:
+            id: lbl_time
+            x: 0
+            y: 55
+            width: 480
+            text_align: CENTER
+            text_font: big_text
+            text_color: 0xFFFFFF
+            text: ""
+
+        # ---------------------------------------------------
+        # LVGL Button 1
+        # - ALWAYS publishes a HA-friendly action: btn1_press
+        # - Optional direct action: light.toggle for BTN1_ENTITY
+        # ---------------------------------------------------
+        - button:
+            id: btn1
+            x: 105
+            y: 165
+            checkable: true
+            widgets:
+              - label:
+                  align: CENTER
+                  text_font: materialdesign_icons
+                  text_color: !lambda return id(ACTIVE);
+                  text: "${BTN1_ICON}"
+            on_click:
+              # ALWAYS: publish action to Home Assistant (state trigger friendly)
+              - script.execute:
+                  id: publish_action
+                  action: "btn1_press"
+
+              # OPTIONAL: direct HA service call (plug & play)
+              - if:
+                  condition:
+                    lambda: |-
+                      return std::string("${DIRECT_ACTIONS}") == "true";
+                  then:
+                    - homeassistant.action:
+                        action: light.toggle
+                        data:
+                          entity_id: ${BTN1_ENTITY}
+
+        - label:
+            x: 105
+            y: 230
+            width: 60
+            text_align: CENTER
+            text_font: label
+            text_color: 0xFFFFFF
+            text: "${BTN1_LABEL}"
+
+        # ---------------------------------------------------
+        # LVGL Button 2
+        # - ALWAYS publishes a HA-friendly action: btn2_press
+        # ---------------------------------------------------
+        - button:
+            id: btn2
+            x: 175
+            y: 165
+            checkable: true
+            widgets:
+              - label:
+                  align: CENTER
+                  text_font: materialdesign_icons
+                  text_color: !lambda return id(ACTIVE);
+                  text: "${BTN2_ICON}"
+            on_click:
+              - script.execute:
+                  id: publish_action
+                  action: "btn2_press"
+              - if:
+                  condition:
+                    lambda: |-
+                      return std::string("${DIRECT_ACTIONS}") == "true";
+                  then:
+                    - homeassistant.action:
+                        action: light.toggle
+                        data:
+                          entity_id: ${BTN2_ENTITY}
+
+        - label:
+            x: 175
+            y: 230
+            width: 60
+            text_align: CENTER
+            text_font: label
+            text_color: 0xFFFFFF
+            text: "${BTN2_LABEL}"
+
+        # ---------------------------------------------------
+        # LVGL Button 3
+        # - ALWAYS publishes a HA-friendly action: btn3_press
+        # ---------------------------------------------------
+        - button:
+            id: btn3
+            x: 245
+            y: 165
+            checkable: true
+            widgets:
+              - label:
+                  align: CENTER
+                  text_font: materialdesign_icons
+                  text_color: !lambda return id(ACTIVE);
+                  text: "${BTN3_ICON}"
+            on_click:
+              - script.execute:
+                  id: publish_action
+                  action: "btn3_press"
+              - if:
+                  condition:
+                    lambda: |-
+                      return std::string("${DIRECT_ACTIONS}") == "true";
+                  then:
+                    - homeassistant.action:
+                        action: light.toggle
+                        data:
+                          entity_id: ${BTN3_ENTITY}
+
+        - label:
+            x: 245
+            y: 230
+            width: 60
+            text_align: CENTER
+            text_font: label
+            text_color: 0xFFFFFF
+            text: "${BTN3_LABEL}"
+
+        # ---------------------------------------------------
+        # LVGL Button 4
+        # - ALWAYS publishes a HA-friendly action: btn4_press
+        # ---------------------------------------------------
+        - button:
+            id: btn4
+            x: 315
+            y: 165
+            checkable: true
+            widgets:
+              - label:
+                  align: CENTER
+                  text_font: materialdesign_icons
+                  text_color: !lambda return id(ACTIVE);
+                  text: "${BTN4_ICON}"
+            on_click:
+              - script.execute:
+                  id: publish_action
+                  action: "btn4_press"
+              - if:
+                  condition:
+                    lambda: |-
+                      return std::string("${DIRECT_ACTIONS}") == "true";
+                  then:
+                    - homeassistant.action:
+                        action: light.toggle
+                        data:
+                          entity_id: ${BTN4_ENTITY}
+
+        - label:
+            x: 315
+            y: 230
+            width: 60
+            text_align: CENTER
+            text_font: label
+            text_color: 0xFFFFFF
+            text: "${BTN4_LABEL}"
+
+script:
+  # ----------------------------------------------------------
+  # publish_action
+  #
+  # Publishes a string to the "SmartDisplay Action" text_sensor and
+  # then clears it again.
+  # ----------------------------------------------------------
+  - id: publish_action
+    mode: queued
+    parameters:
+      action: string
+    then:
+      - text_sensor.template.publish:
+          id: smartdisplay_action
+          state: !lambda |-
+            return action;
+      - delay: 200ms
+      - text_sensor.template.publish:
+          id: smartdisplay_action
+          state: ""
+
+  - id: ui_refresh
+    mode: queued
+    then:
+      # Sync LVGL "checked" state with the mirrored HA entity states
+      - lvgl.widget.update:
+          id: btn1
+          state:
+            checked: !lambda return id(ha_state_btn1).state;
+
+      - lvgl.widget.update:
+          id: btn2
+          state:
+            checked: !lambda return id(ha_state_btn2).state;
+
+      - lvgl.widget.update:
+          id: btn3
+          state:
+            checked: !lambda return id(ha_state_btn3).state;
+
+      - lvgl.widget.update:
+          id: btn4
+          state:
+            checked: !lambda return id(ha_state_btn4).state;
+
+      # Render current time (HH:MM)
+      - lvgl.label.update:
+          id: lbl_time
+          text: !lambda |-
+            auto now = id(homeassistant_time).now();
+            static char buf[6];
+            snprintf(buf, sizeof(buf), "%02d:%02d", now.hour, now.minute);
+            return std::string(buf);
+
+      # Render localized date in German (adjust to your language if needed)
+      - lvgl.label.update:
+          id: lbl_date
+          text: !lambda |-
+            static const char* days[]   = {"", "Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"};
+            static const char* months[] = {"","Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"};
+            auto now = id(homeassistant_time).now();
+            static char buf[40];
+            snprintf(buf, sizeof(buf), "%s, %d. %s", days[now.day_of_week], now.day_of_month, months[now.month]);
+            return std::string(buf);
